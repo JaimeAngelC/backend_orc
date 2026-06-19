@@ -9,7 +9,7 @@ async function llamarGeminiConReintento(ai, config, maxIntentos = 3, retrasoMs =
       if (intento === maxIntentos || (error.status !== 503 && error.status !== 429)) {
         throw error;
       }
-      console.warn(`[Intento ${intento} fallido] Servidor saturado (503). Reintentando...`);
+      console.warn(`[Intento ${intento} fallido] Servidor saturedo (503). Reintentando...`);
       await new Promise(resolve => setTimeout(resolve, retrasoMs));
       retrasoMs *= 2;
     }
@@ -22,19 +22,14 @@ export const procesarFormulario = async (req, res) => {
       return res.status(400).json({ error: 'No se ha recibido ninguna imagen para procesar.' });
     }
 
-    console.log("Procesando formulario SENAVEX basado puramente en extracción de ítems...");
+    console.log("Procesando formulario SENAVEX con cálculo matemático nativo en Backend...");
 
-    let descripcionMercaderia = "";
     let subpartidaArancelaria = "";
+    let codigoSeguimiento = "";
     
-    // Arrays acumuladores para almacenar las celdas e ítems crudos
     let itemsSaldoMercanciaAcumulados = [];
     let itemsExportacionEfectivaAcumulados = [];
     let itemsDetallesEmbarqueAcumulados = [];
-    
-    // Totales leídos literalmente del papel para contrastar al final
-    let totalDisponibleAcumuladoPapel = 0;   // El 6580.975 impreso en el medio
-    let saldoDisponibleFinalPapel = 0;       // El 4730.847 impreso al final
 
     for (let i = 0; i < req.files.length; i++) {
       const file = req.files[i];
@@ -49,32 +44,32 @@ export const procesarFormulario = async (req, res) => {
         model: 'gemini-2.5-flash',
         contents: [
           imagenBase64,
-          `Analiza el formulario de SENAVEX página ${i + 1}. 
-           Extrae estrictamente los pesos individuales (TM) de cada fila de las 3 tablas.
-           No intentes calcular nada, solo extrae los números tal como aparecen de forma individual.`
+          `Analiza minuciosamente el formulario de SENAVEX página ${i + 1}.
+           Extrae estrictamente los pesos individuales (TM) fila por fila de las 3 tablas visibles.
+           Ignora por completo las celdas de totales o subtotales del papel, solo extrae los ítems individuales.`
         ],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              descripcionMercaderia: { type: Type.STRING },
               subpartidaArancelaria: { type: Type.STRING },
+              codigoSeguimiento: { type: Type.STRING },
               
-              // Tabla 1: Valores individuales (Saldo Inicial, Traspaso Int, Traspaso Ext)
+              // Tabla 1: Valores individuales superiores
               itemsSaldoMercancia: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    concepto: { type: Type.STRING }, 
+                    concepto: { type: Type.STRING }, // "Saldo Inicial", "Traspaso Interno", "Traspaso Externo"
                     pesoTM: { type: Type.NUMBER }
                   },
                   required: ["concepto", "pesoTM"]
                 }
               },
               
-              // Tabla 2: Ítems de Exportación Efectiva
+              // Tabla 2: Items de la sección central (Exportación Efectiva)
               itemsExportacionEfectiva: {
                 type: Type.ARRAY,
                 items: {
@@ -86,21 +81,19 @@ export const procesarFormulario = async (req, res) => {
                   required: ["pesoTotalTM"]
                 }
               },
-              totalDisponibleAcumuladoImpreso: { type: Type.NUMBER }, // Captura del 6580.975 del papel
               
-              // Tabla 3: Detalles del Embarque (Abajo)
+              // Tabla 3: Items de la sección inferior (Detalles del Embarque)
               itemsDetallesEmbarque: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    noConocimientoEmbarque: { type: Type.STRING }, 
+                    fechaEmbarque: { type: Type.STRING }, 
                     pesoTotalTM: { type: Type.NUMBER }
                   },
                   required: ["pesoTotalTM"]
                 }
-              },
-              saldoDisponibleFinalImpreso: { type: Type.NUMBER } // Captura del 4730.847 del papel
+              }
             }
           }
         }
@@ -108,75 +101,55 @@ export const procesarFormulario = async (req, res) => {
 
       const paginaDatos = JSON.parse(response.text);
 
-      if (paginaDatos.descripcionMercaderia) descripcionMercaderia = paginaDatos.descripcionMercaderia;
       if (paginaDatos.subpartidaArancelaria) subpartidaArancelaria = paginaDatos.subpartidaArancelaria;
+      if (paginaDatos.codigoSeguimiento) codigoSeguimiento = paginaDatos.codigoSeguimiento;
       
       if (paginaDatos.itemsSaldoMercancia) itemsSaldoMercanciaAcumulados.push(...paginaDatos.itemsSaldoMercancia);
       if (paginaDatos.itemsExportacionEfectiva) itemsExportacionEfectivaAcumulados.push(...paginaDatos.itemsExportacionEfectiva);
       if (paginaDatos.itemsDetallesEmbarque) itemsDetallesEmbarqueAcumulados.push(...paginaDatos.itemsDetallesEmbarque);
-
-      if (paginaDatos.totalDisponibleAcumuladoImpreso) totalDisponibleAcumuladoPapel = paginaDatos.totalDisponibleAcumuladoImpreso;
-      if (paginaDatos.saldoDisponibleFinalImpreso) saldoDisponibleFinalPapel = paginaDatos.saldoDisponibleFinalImpreso;
     }
 
     // =========================================================================
-    // LÓGICA MATEMÁTICA PURA CONTROLADA POR EL BACKEND (CERO ERRORES DE IA)
+    // MATEMÁTICA EXACTA Y CONTROLADA EN NODE.JS (CERO FALSOS ERRORES)
     // =========================================================================
-    const TOLERANCIA = 0.01;
-    let listaErrores = [];
-
-    // PASO 1: Sumar Tabla Saldo Mercancía (2581.336 + 0 + 0)
+    
+    // 1. Sumar Tabla 1: Saldo Mercancía (Ej: 25207.809 + 0 + 0)
     const totalSaldoMercanciaCalculado = itemsSaldoMercanciaAcumulados.reduce((acc, item) => acc + (item.pesoTM || 0), 0);
 
-    // PASO 2: Sumar Tabla Exportación Efectiva (3999.639 + 0 + 0...)
+    // 2. Sumar Tabla 2: Exportación Efectiva (Ej: 23339.996 + 0...)
     const totalExportacionCalculado = itemsExportacionEfectivaAcumulados.reduce((acc, item) => acc + (item.pesoTotalTM || 0), 0);
 
-    // PASO 3: SUMA CRUZADA INTERMEDIA (Total Saldo Mercancía + Total Exportación)
-    // Ej: 2581.336 + 3999.639 = 6580.975
+    // 3. CALCULAR EL ACUMULADO INTERMEDIO (Suma Cruzada)
+    // Ej: 25207.809 + 23339.996 = 48547.805
     const totalDisponibleAcumuladoCalculado = totalSaldoMercanciaCalculado + totalExportacionCalculado;
-    
-    // Validamos contra el valor físico del papel
-    const acumuladoIntermedioOk = Math.abs(totalDisponibleAcumuladoCalculado - totalDisponibleAcumuladoPapel) < TOLERANCIA;
-    if (!acumuladoIntermedioOk && totalDisponibleAcumuladoPapel > 0) {
-      listaErrores.push(`Error de Kardex: La suma del Saldo Inicial (${totalSaldoMercanciaCalculado.toFixed(3)} TM) y la Exportación Efectiva (${totalExportacionCalculado.toFixed(3)} TM) da ${totalDisponibleAcumuladoCalculado.toFixed(3)} TM, pero el papel registra ${totalDisponibleAcumuladoPapel.toFixed(3)} TM.`);
-    }
 
-    // PASO 4: Sumar Tabla Detalles del Embarque (1500.128 + 350.000)
+    // 4. Sumar Tabla 3: Detalles del Embarque (Suma de los 25 ítems de la parte inferior)
     const totalEmbarqueCalculado = itemsDetallesEmbarqueAcumulados.reduce((acc, item) => acc + (item.pesoTotalTM || 0), 0);
 
-    // PASO 5: RESTA FINAL DE CIERRE (Total Disponible Acumulado - Total Embarque)
-    // Ej: 6580.975 - 1850.128 = 4730.847
+    // 5. CALCULAR EL DISPONIBLE FINAL (Acumulado - Embarque)
+    // Ej: 48547.805 - 31288.385 = 17259.420
     const saldoFinalCalculado = totalDisponibleAcumuladoCalculado - totalEmbarqueCalculado;
-
-    // Validamos contra el saldo final del papel
-    const balanceFinalOk = Math.abs(saldoFinalCalculado - saldoDisponibleFinalPapel) < TOLERANCIA;
-    if (!balanceFinalOk && saldoDisponibleFinalPapel > 0) {
-      listaErrores.push(`Error de Balance Final: El acumulado (${totalDisponibleAcumuladoCalculado.toFixed(3)} TM) menos el embarque (${totalEmbarqueCalculado.toFixed(3)} TM) debería dejar ${saldoFinalCalculado.toFixed(3)} TM, pero el papel declara ${saldoDisponibleFinalPapel.toFixed(3)} TM.`);
-    }
-
-    const documentoAprobado = listaErrores.length === 0;
 
     return res.status(200).json({
       success: true,
-      documentoAprobado,
-      totalPaginasProcesadas: req.files.length,
-      alertasYErrores: listaErrores,
       identificacion: {
-        descripcionMercaderia,
-        subpartidaArancelaria
+        subpartidaArancelaria,
+        codigoSeguimiento
       },
-      auditoriaContableReal: {
-        tabla_1_totalSaldoMercancia: Number(totalSaldoMercanciaCalculado.toFixed(3)),
-        tabla_2_totalExportacionEfectiva: Number(totalExportacionCalculado.toFixed(3)),
+      // Cálculos matemáticos reales generados por el servidor
+      calculosSistema: {
+        totalSaldoMercancia: Number(totalSaldoMercanciaCalculado.toFixed(3)),
+        totalExportacionEfectiva: Number(totalExportacionCalculado.toFixed(3)),
         
-        operacionSumaCruzadaIntermedia: `${totalSaldoMercanciaCalculado.toFixed(3)} + ${totalExportacionCalculado.toFixed(3)} = ${totalDisponibleAcumuladoCalculado.toFixed(3)} TM`,
-        totalDisponibleAcumuladoPapel: totalDisponibleAcumuladoPapel,
+        formulaAcumuladoIntermedio: `${totalSaldoMercanciaCalculado.toFixed(3)} + ${totalExportacionCalculado.toFixed(3)} = ${totalDisponibleAcumuladoCalculado.toFixed(3)} TM`,
+        totalDisponibleAcumulado: Number(totalDisponibleAcumuladoCalculado.toFixed(3)),
         
-        tabla_3_totalEmbarque: Number(totalEmbarqueCalculado.toFixed(3)),
+        totalEmbarcadoInferior: Number(totalEmbarqueCalculado.toFixed(3)),
         
-        operacionRestaFinalCierre: `${totalDisponibleAcumuladoCalculado.toFixed(3)} - ${totalEmbarqueCalculado.toFixed(3)} = ${saldoFinalCalculado.toFixed(3)} TM`,
-        saldoFinalPapel: saldoDisponibleFinalPapel
+        formulaBalanceCierre: `${totalDisponibleAcumuladoCalculado.toFixed(3)} - ${totalEmbarqueCalculado.toFixed(3)} = ${saldoFinalCalculado.toFixed(3)} TM`,
+        saldoDisponibleFinalProximoFormulario: Number(saldoFinalCalculado.toFixed(3))
       },
+      // Desglose completo ítem por ítem para renderizar en Flutter
       detallesFilasCompletas: {
         tablaSaldoMercanciaInicial: itemsSaldoMercanciaAcumulados,
         tablaExportacionEfectiva: itemsExportacionEfectivaAcumulados,
@@ -185,10 +158,10 @@ export const procesarFormulario = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error en el flujo matemático estricto:', error);
+    console.error('Error en el flujo matemático nativo:', error);
     return res.status(500).json({
       success: false,
-      error: 'Error interno en el cálculo matemático del formulario.'
+      error: 'Error interno en el procesamiento del formulario.'
     });
   }
 };
